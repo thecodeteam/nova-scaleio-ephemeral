@@ -22,13 +22,6 @@ But not like that:
 checking file nova/virt/libvirt/driver.py
 Hunk #6 succeeded at 1367 with fuzz 1 (offset -13 lines).
 Hunk #7 FAILED at 1403.
-Hunk #8 succeeded at 2796 (offset -16 lines).
-Hunk #9 succeeded at 4553 (offset -16 lines).
-Hunk #10 succeeded at 5129 (offset -16 lines).
-Hunk #11 succeeded at 5840 (offset -16 lines).
-Hunk #12 succeeded at 6087 (offset -16 lines).
-Hunk #13 succeeded at 6117 (offset -16 lines).
-Hunk #14 succeeded at 6540 (offset -16 lines).
 1 out of 14 hunks FAILED
 checking file nova/virt/libvirt/imagebackend.py
 Hunk #3 succeeded at 870 (offset -9 lines).
