@@ -1,5 +1,5 @@
 # ScaleIO ephemeral backend for Nova
-This project provides code patches for Nova to use EMC ScaleIO as ephemeral backend.
+This project provides code patches for Nova to use EMC ScaleIO as ephemeral storage backend.
 
 ## Installation
 Figure out installed version of Nova (e.g. 2015.1.2). Make appropriate diff file available on a compute node dedicated to patching. In the node console type:
@@ -57,10 +57,10 @@ It is important to specify default_sdcguid parameter in upper case.
 Other options (for live migration, etc) depend on your installation but do not depend on ScaleIO ephemeral backend.
 
 ## Flavor restriction
-Since ScaleIO allows volume sizes to be multiple of 8 GB, used flavors must have appropriate disk, ephemeral, and swap sizes. So that either update existing flavors, or create new ones. Otherwise any attempt of boot an instance with ephemeral device(s) will be finished with 'No avaliable host' error.
+Since ScaleIO allows volume sizes to be multiples of 8 GB, used flavors must have appropriate disk, ephemeral, and swap sizes. So either update existing flavors, or create new ones. Otherwise any attempt to boot an instance with ephemeral device(s) will be finished with 'No valid host was found' error.
 
 Moreover this restriction affects ephemeral and swap requests by block device mapping of images or cli calls.
 
 ## Limitations
 * Thick volume provisioning is supported only at the moment.
-* Impossible to use several ScaleIO pools from one compute node.
+* Impossible to use several ScaleIO storage pools from one compute node.
