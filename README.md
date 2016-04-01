@@ -10,7 +10,7 @@ E.g.:
 ```
 $ patch -p 2 -i ~/2015.1.2.diff -d /usr/lib/python2.7/dist-packages/nova
 ```
-It is recommended to run this command previously with --dry-run option to make sure the patch will be applied correctly. The output should looks like this:
+It is recommended to run this command previously with --dry-run option to make sure the patch will be applied correctly. The output should look like this:
 ```
 checking file nova/virt/libvirt/driver.py
 checking file nova/virt/libvirt/imagebackend.py
