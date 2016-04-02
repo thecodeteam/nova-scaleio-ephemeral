@@ -354,10 +354,10 @@ index 934bbca..638a052 100644
  
 diff --git a/nova/virt/libvirt/sio_utils.py b/nova/virt/libvirt/sio_utils.py
 new file mode 100644
-index 0000000..0745560
+index 0000000..144c109
 --- /dev/null
 +++ b/nova/virt/libvirt/sio_utils.py
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,332 @@
 +# Copyright (c) 2015 EMC Corporation
 +# All Rights Reserved
 +#
@@ -599,7 +599,9 @@ index 0000000..0745560
 +        :param dest: Target ScaleIO block device
 +        :return: Nothing
 +        """
-+        images.convert_image(source, dest, 'raw', run_as_root=True)
++        info = images.qemu_img_info(source)
++        images.convert_image(source, dest, info.file_format, 'raw',
++                             run_as_root=True)
 +        # trigger OS probe of partition devices
 +        probe_partitions(device_path=dest, run_as_root=True)
 +
@@ -611,7 +613,7 @@ index 0000000..0745560
 +        :param out_format: Output format (raw, qcow2, etc)
 +        :return: Nothing
 +        """
-+        images.convert_image(source, dest, out_format, run_as_root=True)
++        images.convert_image(source, dest, 'raw', out_format, run_as_root=True)
 +
 +    def extend_volume(self, name, new_size):
 +        """Extend the size of a volume.
