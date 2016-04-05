@@ -54,6 +54,13 @@ $ /bin/emc/scaleio/drv_cfg --query_guid
 ```
 It is important to specify default_sdcguid parameter in upper case.
 
+Also supported:
+```
+[scaleio]
+provisioning_type = <Provisioning type, ThickProvisioned (default) or ThinProvisioned>
+verify_server_certificate = <Verify ScaleIO Gateway SSL certificate, True or False (default)>
+server_certificate_path = <Path to the certificate to validate server certificate>
+```
 Other options (for live migration, etc) depend on your installation but do not depend on ScaleIO ephemeral backend.
 
 ## Flavor restriction
@@ -62,5 +69,5 @@ Since ScaleIO allows volume sizes to be multiples of 8 GB, used flavors must hav
 Moreover this restriction affects ephemeral and swap requests by block device mapping of images or cli calls.
 
 ## Limitations
-* Thick volume provisioning is supported only at the moment.
 * Impossible to use several ScaleIO storage pools from one compute node.
+* Only multiplies of 8 Gb for flavor disk sizes are supported.
