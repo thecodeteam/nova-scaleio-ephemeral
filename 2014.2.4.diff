@@ -174,7 +174,7 @@ index beb5332..e79e73c 100644
                                              instance,
                                              block_device_info)
 diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index c7549fa..10844fc 100644
+index c7549fa..d5b33b7 100644
 --- a/nova/virt/libvirt/imagebackend.py
 +++ b/nova/virt/libvirt/imagebackend.py
 @@ -37,6 +37,7 @@ from nova.virt.libvirt import config as vconfig
@@ -329,15 +329,15 @@ index c7549fa..10844fc 100644
 +        self.driver.export_image(self.path, target, out_format)
 +
 +    def create_snap(self, name):
-+        snap_name = '%s_%s' % (self.volume_name, name)
++        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
 +        self.driver.snapshot_volume(self.volume_name, snap_name)
 +
 +    def remove_snap(self, name, ignore_errors=False):
-+        snap_name = '%s_%s' % (self.volume_name, name)
++        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
 +        self.driver.remove_volume(snap_name)
 +
 +    def rollback_to_snap(self, name):
-+        snap_name = '%s_%s' % (self.volume_name, name)
++        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
 +        self.driver.rollback_to_snapshot(self.volume_name, snap_name)
 +
 +
@@ -353,10 +353,11 @@ index c7549fa..10844fc 100644
          }
  
 diff --git a/nova/virt/libvirt/sio_utils.py b/nova/virt/libvirt/sio_utils.py
-index e69de29..0745560 100644
---- a/nova/virt/libvirt/sio_utils.py
+new file mode 100644
+index 0000000..46781e9
+--- /dev/null
 +++ b/nova/virt/libvirt/sio_utils.py
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,344 @@
 +# Copyright (c) 2015 EMC Corporation
 +# All Rights Reserved
 +#
@@ -367,8 +368,7 @@ index e69de29..0745560 100644
 +# it is provided by or on behalf of EMC.
 +#
 +
-+import re
-+
++from oslo.config import cfg
 +from oslo.utils import units
 +
 +from nova import exception
@@ -377,21 +377,24 @@ index e69de29..0745560 100644
 +from nova.openstack.common import processutils
 +from nova import utils
 +from nova.virt import images
++from nova.virt.libvirt import utils as libvirt_utils
 +
 +try:
 +    import siolib
 +    from siolib import scaleio
++    from siolib import utilities
 +except ImportError:
 +    siolib = None
 +
 +LOG = logging.getLogger(__name__)
++CONF = cfg.CONF
 +
 +if siolib:
-+    CONF = siolib.ConfigOpts()
 +    CONF.register_group(siolib.SIOGROUP)
 +    CONF.register_opts(siolib.SIOOPTS, siolib.SIOGROUP)
 +
 +VOLSIZE_MULTIPLE_GB = 8
++MAX_VOL_NAME_LENGTH = 31
 +
 +
 +def verify_volume_size(requested_size):
@@ -411,9 +414,6 @@ index e69de29..0745560 100644
 +             requested_size))
 +
 +
-+_standard_disk_prefix = re.compile(r'^disk($|(\.(?=.)))')
-+
-+
 +def get_sio_volume_name(instance, disk_name):
 +    """Generate ScaleIO volume name for instance disk.
 +
@@ -425,11 +425,25 @@ index e69de29..0745560 100644
 +    :param disk_name: disk name (i.e. disk, disk.local, etc)
 +    :return: The generated name
 +    """
-+    disk_name = re.sub(_standard_disk_prefix, '', disk_name)
-+    if disk_name:
-+        return 'i-%08x_%s' % (instance['id'], disk_name.replace('.', '-'))
-+    else:
-+        return 'i-%08x' % instance['id']
++    sio_name = utilities.encode_base64(instance['uuid'])
++    if disk_name.startswith('disk.'):
++        sio_name += disk_name[len('disk.'):]
++    elif disk_name != 'disk':
++        sio_name += disk_name
++    if len(sio_name) > MAX_VOL_NAME_LENGTH:
++        raise RuntimeError(_("Disk name '%s' is too long for ScaleIO") %
++                           disk_name)
++    return sio_name
++
++
++def get_sio_snapshot_name(volume_name, snapshot_name):
++    if snapshot_name == libvirt_utils.RESIZE_SNAPSHOT_NAME:
++        return volume_name + '/~'
++    sio_name = '%s/%s' % (volume_name, snapshot_name)
++    if len(sio_name) > MAX_VOL_NAME_LENGTH:
++        raise RuntimeError(_("Snapshot name '%s' is too long for ScaleIO") %
++                           snapshot_name)
++    return sio_name
 +
 +
 +def probe_partitions(device_path, run_as_root=False):
@@ -469,7 +483,8 @@ index e69de29..0745560 100644
 +
 +        # IOCTL reference to ScaleIO API python library
 +        self.ioctx = scaleio.ScaleIO(pd_name=self.pd_name,
-+                                     sp_name=self.sp_name)
++                                     sp_name=self.sp_name,
++                                     conf=CONF)
 +
 +    def get_pool_info(self):
 +        """Return the total storage pool info."""
@@ -667,7 +682,7 @@ index e69de29..0745560 100644
 +        :return: Nothing
 +        """
 +        volumes = self.ioctx.list_volume_names()
-+        prefix = 'i-%08x' % instance['id']
++        prefix = utilities.encode_base64(instance['uuid'])
 +        volumes = (vol for vol in volumes if vol.startswith(prefix))
 +        for volume in volumes:
 +            self.map_volume(volume)
@@ -680,7 +695,7 @@ index e69de29..0745560 100644
 +        :return: Nothing
 +        """
 +        volumes = self.ioctx.list_volume_names()
-+        prefix = 'i-%08x' % instance['id']
++        prefix = utilities.encode_base64(instance['uuid'])
 +        volumes = (vol for vol in volumes if vol.startswith(prefix))
 +        for volume in volumes:
 +            if unmap_only:
