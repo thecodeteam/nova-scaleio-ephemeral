@@ -17,7 +17,7 @@ index 4e8f46e..4391ed4 100644
 +        """Create a new SIO image object"""
 +        super(SIOImage, self).__init__(FORMAT_RAW)
 diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index 6328d05..ee32d7f 100644
+index 6328d05..880dea9 100644
 --- a/nova/virt/libvirt/driver.py
 +++ b/nova/virt/libvirt/driver.py
 @@ -103,6 +103,7 @@ from nova.virt.libvirt import instancejobtracker
@@ -141,6 +141,30 @@ index 6328d05..ee32d7f 100644
              # get the real disk size or
              # raise a localized error if image is unavailable
              if disk_type == 'file':
+@@ -6745,8 +6774,12 @@ class LibvirtDriver(driver.ComputeDriver):
+         ephemeral_down = flavor.ephemeral_gb < eph_size
+         disk_info_text = self.get_instance_disk_info(
+             instance, block_device_info=block_device_info)
+-        booted_from_volume = self._is_booted_from_volume(instance,
+-                                                         disk_info_text)
++        block_device_mapping = driver.block_device_info_get_mapping(
++                                                        block_device_info)
++        root_disk = block_device.get_root_bdm(block_device_mapping)
++        booted_from_volume = (
++            self._is_booted_from_volume(instance, disk_info_text)
++            and root_disk)
+         if (root_down and not booted_from_volume) or ephemeral_down:
+             reason = _("Unable to resize disk down.")
+             raise exception.InstanceFaultRollback(
+@@ -6780,8 +6813,6 @@ class LibvirtDriver(driver.ComputeDriver):
+ 
+         self.power_off(instance, timeout, retry_interval)
+ 
+-        block_device_mapping = driver.block_device_info_get_mapping(
+-            block_device_info)
+         for vol in block_device_mapping:
+             connection_info = vol['connection_info']
+             disk_dev = vol['mount_device'].rpartition("/")[2]
 diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
 index 558fe82..cddbda4 100644
 --- a/nova/virt/libvirt/imagebackend.py
