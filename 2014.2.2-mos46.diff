@@ -1,5 +1,5 @@
 diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index eba1ff3..a8776eb 100644
+index eba1ff3..08fb5d1 100644
 --- a/nova/virt/libvirt/driver.py
 +++ b/nova/virt/libvirt/driver.py
 @@ -104,6 +104,7 @@ from nova.virt.libvirt import imagecache
@@ -19,23 +19,18 @@ index eba1ff3..a8776eb 100644
  
          if destroy_disks or (
                  migrate_data and migrate_data.get('is_shared_block_storage',
-@@ -1216,6 +1219,15 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -1216,6 +1219,10 @@ class LibvirtDriver(driver.ComputeDriver):
                  ceph_conf=CONF.libvirt.images_rbd_ceph_conf,
                  rbd_user=CONF.libvirt.rbd_user)
  
 +    @staticmethod
 +    def _get_sio_driver():
-+        # TODO(emc): Currently we assume a static ScaleIO protection domain and
-+        # storage pool. In the future we will need to have the API library
-+        # determine what protection domain and storage pool to use based on
-+        # the compute host node information. For now if defined use values
-+        # present in conf file
 +        return sio_utils.SIODriver()
 +
      def _cleanup_rbd(self, instance):
          LibvirtDriver._get_rbd_driver().cleanup_volumes(instance)
  
-@@ -1268,6 +1280,10 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -1268,6 +1275,10 @@ class LibvirtDriver(driver.ComputeDriver):
              return disks
          return []
  
@@ -46,7 +41,7 @@ index eba1ff3..a8776eb 100644
      def get_volume_connector(self, instance):
          if not self._initiator:
              self._initiator = libvirt_utils.get_iscsi_initiator()
-@@ -1318,10 +1334,22 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -1318,10 +1329,22 @@ class LibvirtDriver(driver.ComputeDriver):
              utils.execute('rm', '-rf', target, delay_on_retry=True,
                            attempts=5)
  
@@ -69,7 +64,7 @@ index eba1ff3..a8776eb 100644
  
      def _connect_volume(self, connection_info, disk_info):
          driver_type = connection_info.get('driver_volume_type')
-@@ -1684,7 +1712,7 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -1684,7 +1707,7 @@ class LibvirtDriver(driver.ComputeDriver):
          image_format = CONF.libvirt.snapshot_image_format or source_type
  
          # NOTE(bfilippov): save lvm and rbd as raw
@@ -78,7 +73,7 @@ index eba1ff3..a8776eb 100644
              image_format = 'raw'
  
          metadata = self._create_snapshot_metadata(base,
-@@ -1707,7 +1735,7 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -1707,7 +1730,7 @@ class LibvirtDriver(driver.ComputeDriver):
          if (self._has_min_version(MIN_LIBVIRT_LIVESNAPSHOT_VERSION,
                                    MIN_QEMU_LIVESNAPSHOT_VERSION,
                                    REQ_HYPERVISOR_LIVESNAPSHOT)
@@ -87,7 +82,7 @@ index eba1ff3..a8776eb 100644
               and not CONF.ephemeral_storage_encryption.enabled):
              live_snapshot = True
              # Abort is an idempotent operation, so make sure any block
-@@ -3038,6 +3066,8 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -3038,6 +3061,8 @@ class LibvirtDriver(driver.ComputeDriver):
                  size = None
  
              backend = image('disk')
@@ -96,7 +91,7 @@ index eba1ff3..a8776eb 100644
              if backend.SUPPORTS_CLONE:
                  def clone_fallback_to_fetch(*args, **kwargs):
                      try:
-@@ -4602,6 +4632,8 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -4602,6 +4627,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                 CONF.libvirt.images_volume_group)
          elif CONF.libvirt.images_type == 'rbd':
              info = LibvirtDriver._get_rbd_driver().get_pool_info()
@@ -105,7 +100,7 @@ index eba1ff3..a8776eb 100644
          else:
              info = libvirt_utils.get_fs_info(CONF.instances_path)
  
-@@ -5156,7 +5188,6 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -5156,7 +5183,6 @@ class LibvirtDriver(driver.ComputeDriver):
          """
          if (CONF.libvirt.images_type == dest_check_data.get('image_type') and
                  self.image_backend.backend().is_shared_block_storage()):
@@ -113,7 +108,7 @@ index eba1ff3..a8776eb 100644
              return True
  
          if (dest_check_data.get('is_shared_instance_path') and
-@@ -5576,7 +5607,9 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -5576,7 +5602,9 @@ class LibvirtDriver(driver.ComputeDriver):
                  raise exception.DestinationDiskExists(path=instance_dir)
              os.mkdir(instance_dir)
  
@@ -124,7 +119,7 @@ index eba1ff3..a8776eb 100644
                  # Ensure images and backing files are present.
                  self._create_images_and_backing(context, instance,
                                                  instance_dir, disk_info)
-@@ -5745,6 +5778,10 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -5745,6 +5773,10 @@ class LibvirtDriver(driver.ComputeDriver):
              disk_dev = vol['mount_device'].rpartition("/")[2]
              volume_devices.add(disk_dev)
  
@@ -135,7 +130,7 @@ index eba1ff3..a8776eb 100644
          disk_info = []
          doc = etree.fromstring(xml)
          disk_nodes = doc.findall('.//devices/disk')
-@@ -5771,6 +5808,11 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -5771,6 +5803,11 @@ class LibvirtDriver(driver.ComputeDriver):
                            'volume', {'path': path, 'target': target})
                  continue
  
@@ -147,7 +142,7 @@ index eba1ff3..a8776eb 100644
              # get the real disk size or
              # raise a localized error if image is unavailable
              if disk_type == 'file':
-@@ -6163,6 +6205,25 @@ class LibvirtDriver(driver.ComputeDriver):
+@@ -6163,6 +6200,25 @@ class LibvirtDriver(driver.ComputeDriver):
              self._cleanup_failed_migration(inst_base)
              utils.execute('mv', inst_base_resize, inst_base)
  
@@ -174,10 +169,26 @@ index eba1ff3..a8776eb 100644
                                              instance,
                                              block_device_info)
 diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index 934bbca..4b5ac4b 100644
+index 934bbca..896c1e9 100644
 --- a/nova/virt/libvirt/imagebackend.py
 +++ b/nova/virt/libvirt/imagebackend.py
-@@ -37,6 +37,7 @@ from nova.virt.libvirt import config as vconfig
+@@ -20,11 +20,15 @@ import os
+ from oslo.config import cfg
+ import six
+ 
++from nova.compute import flavors
++from nova.compute import task_states
++from nova import context as nova_context
+ from nova import exception
+ from nova.i18n import _
+ from nova.i18n import _LE, _LI
+ from nova import image
+ from nova import keymgr
++from nova import objects
+ from nova.openstack.common import excutils
+ from nova.openstack.common import fileutils
+ from nova.openstack.common import jsonutils
+@@ -37,6 +41,7 @@ from nova.virt.libvirt import config as vconfig
  from nova.virt.libvirt import dmcrypt
  from nova.virt.libvirt import lvm
  from nova.virt.libvirt import rbd_utils
@@ -185,7 +196,7 @@ index 934bbca..4b5ac4b 100644
  from nova.virt.libvirt import utils as libvirt_utils
  
  __imagebackend_opts = [
-@@ -352,6 +353,49 @@ class Image(object):
+@@ -352,6 +357,49 @@ class Image(object):
          raise exception.ImageUnacceptable(image_id=image_id_or_uri,
                                            reason=reason)
  
@@ -235,7 +246,7 @@ index 934bbca..4b5ac4b 100644
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -753,6 +797,108 @@ class Rbd(Image):
+@@ -753,6 +801,115 @@ class Rbd(Image):
                                            reason=reason)
  
  
@@ -247,12 +258,17 @@ index 934bbca..4b5ac4b 100644
 +        # in create_image call path
 +        super(Sio, self).__init__("block", "raw", is_block_dev=False)
 +
-+        # TODO(emc): Currently we assume a static ScaleIO protection domain
-+        # and storage pool. In the future we will need to have the API library
-+        # determine what protection domain and storage pool to use based on
-+        # the compute host node  information. For now if defined use values
-+        # present in conf file
-+        self.driver = sio_utils.SIODriver()
++        adm_ctx = nova_context.get_admin_context(read_deleted='yes')
++        flavor = objects.Flavor.get_by_id(adm_ctx,
++                                          instance['instance_type_id'])
++        self.extra_specs = flavor.extra_specs
++        if (instance['task_state'] == task_states.RESIZE_FINISH):
++            flavor = flavors.extract_flavor(instance, 'old_')
++            flavor = objects.Flavor.get_by_id(adm_ctx, flavor['id'])
++            self.orig_extra_specs = flavor.extra_specs
++        else:
++            self.orig_extra_specs = None
++        self.driver = sio_utils.SIODriver(self.extra_specs)
 +
 +        if path:
 +            vol_id = path.split('-')[-1]
@@ -291,7 +307,9 @@ index 934bbca..4b5ac4b 100644
 +                LOG.debug('Cannot resize volume %s to a smaller size.',
 +                          self.volume_name)
 +            elif size > vol_size:
-+                self.driver.extend_volume(self.volume_name, size)
++                self.driver.extend_volume(self.volume_name, size,
++                                          self.extra_specs,
++                                          self.orig_extra_specs)
 +
 +            self.path = self.driver.map_volume(self.volume_name)
 +        else:
@@ -301,7 +319,7 @@ index 934bbca..4b5ac4b 100644
 +            base_size = disk.get_disk_size(base)
 +            self.verify_base_size(base, size, base_size=base_size)
 +
-+            self.driver.create_volume(self.volume_name, size)
++            self.driver.create_volume(self.volume_name, size, self.extra_specs)
 +            self.path = self.driver.map_volume(self.volume_name)
 +            self.driver.import_image(base, self.path)
 +
@@ -344,7 +362,7 @@ index 934bbca..4b5ac4b 100644
  class Backend(object):
      def __init__(self, use_cow):
          self.BACKEND = {
-@@ -760,6 +906,7 @@ class Backend(object):
+@@ -760,6 +917,7 @@ class Backend(object):
              'qcow2': Qcow2,
              'lvm': Lvm,
              'rbd': Rbd,
@@ -354,10 +372,10 @@ index 934bbca..4b5ac4b 100644
  
 diff --git a/nova/virt/libvirt/sio_utils.py b/nova/virt/libvirt/sio_utils.py
 new file mode 100644
-index 0000000..379a0c5
+index 0000000..85deed9
 --- /dev/null
 +++ b/nova/virt/libvirt/sio_utils.py
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,397 @@
 +# Copyright (c) 2015 EMC Corporation
 +# All Rights Reserved
 +#
@@ -373,6 +391,7 @@ index 0000000..379a0c5
 +
 +from nova import exception
 +from nova.i18n import _
++from nova.openstack.common import excutils
 +from nova.openstack.common import log as logging
 +from nova.openstack.common import processutils
 +from nova import utils
@@ -395,6 +414,11 @@ index 0000000..379a0c5
 +
 +VOLSIZE_MULTIPLE_GB = 8
 +MAX_VOL_NAME_LENGTH = 31
++PROTECTION_DOMAIN_KEY = 'sio:pd_name'
++STORAGE_POOL_KEY = 'sio:sp_name'
++PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
++PROVISIONING_TYPES_MAP = {'thin': 'ThinProvisioned',
++                          'thick': 'ThickProvisioned'}
 +
 +
 +def verify_volume_size(requested_size):
@@ -467,19 +491,22 @@ index 0000000..379a0c5
 +    pd_name = None
 +    sp_name = None
 +
-+    def __init__(self, domain_name=None, pool_name=None):
++    def __init__(self, extra_specs=None):
 +        """Initialize ScaleIODriver object.
 +
-+        :param domain_name: ScaleIO protection domain name
-+        :param pool_name:  ScaleIO storage pool name
++        :param extra_specs: A dict with instance flavor extra specs
 +        :return: Nothing
 +        """
 +        if siolib is None:
 +            raise RuntimeError(_('ScaleIO python libraries not found'))
 +
-+        if domain_name and pool_name:
-+            self.pd_name = domain_name.encode('utf8')
-+            self.sp_name = pool_name.encode('utf8')
++        if extra_specs:
++            self.pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY)
++            if self.pd_name:
++                self.pd_name = self.pd_name.encode('utf8')
++            self.sp_name = extra_specs.get(STORAGE_POOL_KEY)
++            if self.sp_name:
++                self.sp_name = self.sp_name.encode('utf8')
 +
 +        # IOCTL reference to ScaleIO API python library
 +        self.ioctx = scaleio.ScaleIO(pd_name=self.pd_name,
@@ -495,16 +522,20 @@ index 0000000..379a0c5
 +                'free': free_bytes,
 +                'used': used_bytes}
 +
-+    def create_volume(self, name, size):
++    def create_volume(self, name, size, extra_specs):
 +        """Create a ScaleIO volume.
 +
 +        :param name: Volume name to use
 +        :param size: Size of volume to create
++        :param extra_specs: A dict with instance flavor extra specs
 +        :return: Nothing
 +        """
++        ptype = extra_specs.get(PROVISIONING_TYPE_KEY)
++        ptype = PROVISIONING_TYPES_MAP.get(ptype, ptype)
 +        # NOTE(ft): siolib does not raise an exception if the volume
 +        # already exists
-+        self.ioctx.create_volume(name, size / units.Gi)
++        self.ioctx.create_volume(name, volume_size_gb=(size / units.Gi),
++                                 provisioning_type=ptype)
 +
 +    def remove_volume(self, name, ignore_mappings=False):
 +        """Deletes (removes) a ScaleIO volume.
@@ -629,21 +660,59 @@ index 0000000..379a0c5
 +        """
 +        images.convert_image(source, dest, 'raw', out_format, run_as_root=True)
 +
-+    def extend_volume(self, name, new_size):
++    def extend_volume(self, name, new_size, extra_specs, orig_extra_specs):
 +        """Extend the size of a volume.
 +
 +        This method is used primarily with openstack resize operation
 +
 +        :param name: String ScaleIO volume name to extend
 +        :param new_size: Size of the volume to extend to
++        :param extra_specs: A dict with instance flavor extra specs
++        :param orig_extra_specs: A dict with orig instance flavor extra specs
 +        :return: Nothing
 +        """
-+        vol_id = self.get_volume_id(name)
-+        self.ioctx.extend_volume(vol_id, new_size / units.Gi)
-+        # NOTE(ft): siolib does not raise an exception if it cannot extend
-+        # the volume
-+        if self.get_volume_size(name) != new_size:
-+            raise RuntimeError(_('Failed to extend disk volume %s') % name)
++        if (extra_specs.get(PROTECTION_DOMAIN_KEY) ==
++                 orig_extra_specs.get(PROTECTION_DOMAIN_KEY) and
++                 extra_specs.get(STORAGE_POOL_KEY) ==
++                 orig_extra_specs.get(STORAGE_POOL_KEY)):
++            vol_id = self.get_volume_id(name)
++            self.ioctx.extend_volume(vol_id, new_size / units.Gi)
++            # NOTE(ft): siolib does not raise an exception if it cannot extend
++            # the volume
++            if self.get_volume_size(name) != new_size:
++                raise RuntimeError(_('Failed to extend disk volume %s') % name)
++        else:
++            tmp_name = name + '/#'
++            self.create_volume(tmp_name, new_size, extra_specs)
++            try:
++                new_path = self.map_volume(tmp_name)
++                vol_id = self.get_volume_id(name)
++                old_path = self.ioctx.get_volumepath(vol_id)
++                if old_path:
++                    mapped = True
++                else:
++                    mapped = False
++                    self.ioctx.attach_volume(vol_id)
++                    old_path = self.ioctx.get_volumepath(vol_id)
++                    if not old_path:
++                        raise RuntimeError(
++                            _('Failed to attach disk volume %s') % name)
++                utils.execute('dd',
++                              'if=%s' % old_path,
++                              'of=%s' % new_path,
++                              'bs=1M',
++                              'iflag=direct',
++                              'conv=fsync',
++                              run_as_root=True)
++                self.unmap_volume(name)
++                self.remove_volume(name)
++                if not mapped:
++                    self.unmap_volume(tmp_name)
++                new_id = self.get_volume_id(tmp_name)
++                self.ioctx.rename_volume(new_id, name)
++            except Exception:
++                with excutils.save_and_reraise_exception():
++                    self.remove_volume(tmp_name, ignore_mappings=True)
 +
 +    def snapshot_volume(self, name, snapshot_name):
 +        """Snapshot a volume.
@@ -723,6 +792,10 @@ index c7cda44..cdb9cdf 100644
      """Retrieve disk type (raw, qcow2, lvm) for given file."""
 +    if path.startswith('/dev/disk/by-id/emc-vol'):
 +        return 'sio'
+     if path.startswith('/dev'):
+         return 'lvm'
+     elif path.startswith('rbd:'):
+rn 'sio'
      if path.startswith('/dev'):
          return 'lvm'
      elif path.startswith('rbd:'):
