@@ -63,6 +63,15 @@ server_certificate_path = <Path to the certificate to validate server certificat
 ```
 Other options (for live migration, etc) depend on your installation but do not depend on ScaleIO ephemeral backend.
 
+## Flavor settings
+ScaleIO related parameters of instance volumes can be customized by flavor extra spec keys:
+```
+sio:provisioning_type <thin or thick>
+sio:pd_name <protection domain name>
+sio:sp_name <storage pool name>
+```
+If instance flavor does not contain a key value, default value from compute host config will be used.
+
 ## Flavor restriction
 Since ScaleIO allows volume sizes to be multiples of 8 GB, used flavors must have appropriate disk, ephemeral, and swap sizes. So either update existing flavors, or create new ones. Otherwise any attempt to boot an instance with ephemeral device(s) will be finished with 'No valid host was found' error.
 
