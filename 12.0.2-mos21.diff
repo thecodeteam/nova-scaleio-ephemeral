@@ -161,7 +161,7 @@ index 7b772c1..c6612fc 100644
              connection_info = vol['connection_info']
              disk_dev = vol['mount_device'].rpartition("/")[2]
 diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index 558fe82..d327391 100644
+index 558fe82..52af225 100644
 --- a/nova/virt/libvirt/imagebackend.py
 +++ b/nova/virt/libvirt/imagebackend.py
 @@ -29,6 +29,7 @@ from oslo_utils import strutils
@@ -213,7 +213,7 @@ index 558fe82..d327391 100644
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -936,6 +957,113 @@ class Ploop(Image):
+@@ -936,6 +957,115 @@ class Ploop(Image):
              create_ploop_image(base, self.path, size)
  
  
@@ -268,7 +268,9 @@ index 558fe82..d327391 100644
 +            if size < vol_size:
 +                LOG.debug('Cannot resize volume %s to a smaller size.',
 +                          self.volume_name)
-+            elif size > vol_size:
++            else:
++                # give a chance for extend_volume to migrate the volume to
++                # another pd/sp if required
 +                self.driver.extend_volume(
 +                    self.volume_name, size,
 +                    self.extra_specs, self.orig_extra_specs)
@@ -327,7 +329,7 @@ index 558fe82..d327391 100644
  class Backend(object):
      def __init__(self, use_cow):
          self.BACKEND = {
-@@ -944,7 +1072,8 @@ class Backend(object):
+@@ -944,7 +1074,8 @@ class Backend(object):
              'lvm': Lvm,
              'rbd': Rbd,
              'ploop': Ploop,
@@ -339,10 +341,10 @@ index 558fe82..d327391 100644
      def backend(self, image_type=None):
 diff --git a/nova/virt/libvirt/storage/sio_utils.py b/nova/virt/libvirt/storage/sio_utils.py
 new file mode 100644
-index 0000000..9503ffe
+index 0000000..aeef0a8
 --- /dev/null
 +++ b/nova/virt/libvirt/storage/sio_utils.py
-@@ -0,0 +1,396 @@
+@@ -0,0 +1,404 @@
 +# Copyright (c) 2015 EMC Corporation
 +# All Rights Reserved
 +#
@@ -628,7 +630,7 @@ index 0000000..9503ffe
 +        images.convert_image(source, dest, 'raw', out_format, run_as_root=True)
 +
 +    def extend_volume(self, name, new_size, extra_specs, orig_extra_specs):
-+        """Extend the size of a volume.
++        """Extend the size of a volume, honoring extra specs.
 +
 +        This method is used primarily with openstack resize operation
 +
@@ -642,6 +644,9 @@ index 0000000..9503ffe
 +                 orig_extra_specs.get(PROTECTION_DOMAIN_KEY) and
 +                 extra_specs.get(STORAGE_POOL_KEY) ==
 +                 orig_extra_specs.get(STORAGE_POOL_KEY)):
++            if self.get_volume_size(name) == new_size:
++                # extending is not required
++                return
 +            vol_id = self.get_volume_id(name)
 +            self.ioctx.extend_volume(vol_id, new_size / units.Gi)
 +            # NOTE(ft): siolib does not raise an exception if it cannot extend
@@ -670,8 +675,7 @@ index 0000000..9503ffe
 +                              'bs=1M',
 +                              'iflag=direct',
 +                              run_as_root=True)
-+                self.unmap_volume(name)
-+                self.remove_volume(name)
++                self.remove_volume(name, ignore_mappings=True)
 +                if not mapped:
 +                    self.unmap_volume(tmp_name)
 +                new_id = self.get_volume_id(tmp_name)
@@ -689,9 +693,15 @@ index 0000000..9503ffe
 +        """
 +        vol_id = self.get_volume_id(name)
 +        snap_gid, _vol_list = self.ioctx.snapshot_volume(snapshot_name, vol_id)
-+        # NOTE(ft): siolib does not rais an exception if it cannot create
++        # NOTE(ft): siolib does not raise an exception if it cannot create
 +        # the snapshot
 +        if not snap_gid:
++            if self.check_volume_exists(snapshot_name):
++                self.remove_volume(snapshot_name, ignore_mappings=True)
++                (snap_gid,
++                 _vol_list) = self.ioctx.snapshot_volume(snapshot_name, vol_id)
++                if snap_gid:
++                    return
 +            raise RuntimeError(_('Failed to create snapshot of disk volume %s')
 +                               % name)
 +

@@ -169,7 +169,7 @@ index a2c04d6..2f5c6ae 100644
                                              instance,
                                              block_device_info)
 diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index c7549fa..035e14a 100644
+index c7549fa..91127bc 100644
 --- a/nova/virt/libvirt/imagebackend.py
 +++ b/nova/virt/libvirt/imagebackend.py
 @@ -20,11 +20,15 @@ import os
@@ -246,7 +246,7 @@ index c7549fa..035e14a 100644
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -737,6 +785,115 @@ class Rbd(Image):
+@@ -737,6 +785,117 @@ class Rbd(Image):
                                            reason=reason)
  
  
@@ -306,7 +306,9 @@ index c7549fa..035e14a 100644
 +            if size < vol_size:
 +                LOG.debug('Cannot resize volume %s to a smaller size.',
 +                          self.volume_name)
-+            elif size > vol_size:
++            else:
++                # give a chance for extend_volume to migrate the volume to
++                # another pd/sp if required
 +                self.driver.extend_volume(self.volume_name, size,
 +                                          self.extra_specs,
 +                                          self.orig_extra_specs)
@@ -362,7 +364,7 @@ index c7549fa..035e14a 100644
  class Backend(object):
      def __init__(self, use_cow):
          self.BACKEND = {
-@@ -744,6 +901,7 @@ class Backend(object):
+@@ -744,6 +903,7 @@ class Backend(object):
              'qcow2': Qcow2,
              'lvm': Lvm,
              'rbd': Rbd,
@@ -372,10 +374,10 @@ index c7549fa..035e14a 100644
  
 diff --git a/nova/virt/libvirt/sio_utils.py b/nova/virt/libvirt/sio_utils.py
 new file mode 100644
-index 0000000..310076b
+index 0000000..a2e63eb
 --- /dev/null
 +++ b/nova/virt/libvirt/sio_utils.py
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,403 @@
 +# Copyright (c) 2015 EMC Corporation
 +# All Rights Reserved
 +#
@@ -659,7 +661,7 @@ index 0000000..310076b
 +        images.convert_image(source, dest, out_format, run_as_root=True)
 +
 +    def extend_volume(self, name, new_size, extra_specs, orig_extra_specs):
-+        """Extend the size of a volume.
++        """Extend the size of a volume, honoring extra specs.
 +
 +        This method is used primarily with openstack resize operation
 +
@@ -673,6 +675,9 @@ index 0000000..310076b
 +                 orig_extra_specs.get(PROTECTION_DOMAIN_KEY) and
 +                 extra_specs.get(STORAGE_POOL_KEY) ==
 +                 orig_extra_specs.get(STORAGE_POOL_KEY)):
++            if self.get_volume_size(name) == new_size:
++                # extending is not required
++                return
 +            vol_id = self.get_volume_id(name)
 +            self.ioctx.extend_volume(vol_id, new_size / units.Gi)
 +            # NOTE(ft): siolib does not raise an exception if it cannot extend
@@ -702,8 +707,7 @@ index 0000000..310076b
 +                              'iflag=direct',
 +                              'conv=fsync',
 +                              run_as_root=True)
-+                self.unmap_volume(name)
-+                self.remove_volume(name)
++                self.remove_volume(name, ignore_mappings=True)
 +                if not mapped:
 +                    self.unmap_volume(tmp_name)
 +                new_id = self.get_volume_id(tmp_name)
@@ -721,9 +725,15 @@ index 0000000..310076b
 +        """
 +        vol_id = self.get_volume_id(name)
 +        snap_gid, _vol_list = self.ioctx.snapshot_volume(snapshot_name, vol_id)
-+        # NOTE(ft): siolib does not rais an exception if it cannot create
++        # NOTE(ft): siolib does not raise an exception if it cannot create
 +        # the snapshot
 +        if not snap_gid:
++            if self.check_volume_exists(snapshot_name):
++                self.remove_volume(snapshot_name, ignore_mappings=True)
++                (snap_gid,
++                 _vol_list) = self.ioctx.snapshot_volume(snapshot_name, vol_id)
++                if snap_gid:
++                    return
 +            raise RuntimeError(_('Failed to create snapshot of disk volume %s')
 +                               % name)
 +
@@ -790,10 +800,6 @@ index c05de93..5e3c55e 100644
      """Retrieve disk type (raw, qcow2, lvm) for given file."""
 +    if path.startswith('/dev/disk/by-id/emc-vol'):
 +        return 'sio'
-     if path.startswith('/dev'):
-         return 'lvm'
-     elif path.startswith('rbd:'):
-rn 'sio'
      if path.startswith('/dev'):
          return 'lvm'
      elif path.startswith('rbd:'):
