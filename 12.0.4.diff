@@ -17,7 +17,7 @@ index 4e8f46e..4391ed4 100644
 +        """Create a new SIO image object"""
 +        super(SIOImage, self).__init__(FORMAT_RAW)
 diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index 7e99ba7..70233e6 100644
+index 7e99ba7..1cb785f 100644
 --- a/nova/virt/libvirt/driver.py
 +++ b/nova/virt/libvirt/driver.py
 @@ -103,6 +103,7 @@ from nova.virt.libvirt import instancejobtracker
@@ -59,6 +59,15 @@ index 7e99ba7..70233e6 100644
      def get_volume_connector(self, instance):
          root_helper = utils.get_root_helper()
          return connector.get_connector_properties(
+@@ -1038,7 +1049,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         # reasonably assumed that no such instances exist in the wild
+         # anymore, it should be set back to False (the default) so it will
+         # throw errors, like it should.
+-        if backend.check_image_exists():
++        if CONF.libvirt.images_type != 'rbd' or backend.check_image_exists():
+             backend.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME,
+                                 ignore_errors=True)
+ 
 @@ -1046,6 +1057,7 @@ class LibvirtDriver(driver.ComputeDriver):
              self._undefine_domain(instance)
              self.unplug_vifs(instance, network_info)
@@ -160,6 +169,15 @@ index 7e99ba7..70233e6 100644
          for vol in block_device_mapping:
              connection_info = vol['connection_info']
              disk_dev = vol['mount_device'].rpartition("/")[2]
+@@ -7089,7 +7115,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         # anymore, the try/except/finally should be removed,
+         # and ignore_errors should be set back to False (the default) so
+         # that problems throw errors, like they should.
+-        if backend.check_image_exists():
++        if CONF.libvirt.images_type != 'rbd' or backend.check_image_exists():
+             try:
+                 backend.rollback_to_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
+             except exception.SnapshotNotFound:
 diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
 index 558fe82..52af225 100644
 --- a/nova/virt/libvirt/imagebackend.py
