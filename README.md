@@ -32,7 +32,7 @@ Hunk #2 succeeded at 476 with fuzz 2 (offset -16 lines).
 ```
 If the output contains failures or fuzzes, the patch does not suit installed Nova.
 
-You also need to install [python-scaleioclient](https://github.com/emccode/python-scaleioclient) from corresponding branch (juno, kilo, etc).
+You also need to install [python-scaleioclient](https://github.com/codedellemc/python-scaleioclient) from corresponding branch (juno, kilo, etc).
 
 After applying a patch configure (see the next chapter) and restart Nova compute service.
 
