@@ -1,0 +1,498 @@
+diff --git a/nova/virt/image/model.py b/nova/virt/image/model.py
+index 4e8f46e..4391ed4 100644
+--- a/nova/virt/image/model.py
++++ b/nova/virt/image/model.py
+@@ -127,3 +127,13 @@ class RBDImage(Image):
+         self.user = user
+         self.password = password
+         self.servers = servers
++
++
++class SIOImage(Image):
++    """Class for images that are volumes on a remote
++    ScaleIO server
++    """
++
++    def __init__(self):
++        """Create a new SIO image object"""
++        super(SIOImage, self).__init__(FORMAT_RAW)
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 8c1e27a..4bcf82c 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -105,6 +105,7 @@ from nova.virt.libvirt import instancejobtracker
+ from nova.virt.libvirt.storage import dmcrypt
+ from nova.virt.libvirt.storage import lvm
+ from nova.virt.libvirt.storage import rbd_utils
++from nova.virt.libvirt.storage import sio_utils
+ from nova.virt.libvirt import utils as libvirt_utils
+ from nova.virt.libvirt import vif as libvirt_vif
+ from nova.virt.libvirt.volume import remotefs
+@@ -1134,10 +1135,22 @@ class LibvirtDriver(driver.ComputeDriver):
+                 self._cleanup_lvm(instance, block_device_info)
+             if CONF.libvirt.images_type == 'rbd':
+                 self._cleanup_rbd(instance)
++        if CONF.libvirt.images_type == 'sio':
++            self._cleanup_sio(instance, destroy_disks)
+ 
+         is_shared_block_storage = False
+         if migrate_data and 'is_shared_block_storage' in migrate_data:
+             is_shared_block_storage = migrate_data.is_shared_block_storage
++        if (not destroy_disks and not migrate_data and
++                instance.task_state == task_states.RESIZE_REVERTING):
++            elevated = context.elevated()
++            migration = objects.Migration.get_by_instance_and_status(
++                elevated, instance.uuid, 'reverting')
++            if (migration.source_compute != migration.dest_compute and
++                    instance.host == migration.dest_compute and
++                    self._host.get_hostname() == instance.node and
++                    self.image_backend.backend().is_shared_block_storage()):
++                is_shared_block_storage = True
+         if destroy_disks or is_shared_block_storage:
+             attempts = int(instance.system_metadata.get('clean_attempts',
+                                                         '0'))
+@@ -1187,6 +1200,10 @@ class LibvirtDriver(driver.ComputeDriver):
+                 ceph_conf=CONF.libvirt.images_rbd_ceph_conf,
+                 rbd_user=CONF.libvirt.rbd_user)
+ 
++    @staticmethod
++    def _get_sio_driver():
++        return sio_utils.SIODriver()
++
+     def _cleanup_rbd(self, instance):
+         LibvirtDriver._get_rbd_driver().cleanup_volumes(instance)
+ 
+@@ -1220,6 +1237,10 @@ class LibvirtDriver(driver.ComputeDriver):
+             return disks
+         return []
+ 
++    def _cleanup_sio(self, instance, destroy_disks):
++        LibvirtDriver._get_sio_driver().cleanup_volumes(
++            instance, unmap_only=not destroy_disks)
++
+     def get_volume_connector(self, instance):
+         root_helper = utils.get_root_helper()
+         return connector.get_connector_properties(
+@@ -1253,7 +1274,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         # reasonably assumed that no such instances exist in the wild
+         # anymore, it should be set back to False (the default) so it will
+         # throw errors, like it should.
+-        if backend.check_image_exists():
++        if CONF.libvirt.images_type != 'rbd' or backend.check_image_exists():
+             backend.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME,
+                                 ignore_errors=True)
+ 
+@@ -1261,6 +1282,7 @@ class LibvirtDriver(driver.ComputeDriver):
+             self._undefine_domain(instance)
+             self.unplug_vifs(instance, network_info)
+             self.unfilter_instance(instance, network_info)
++            self.image_backend.backend().disconnect_disks(instance)
+ 
+     def _get_volume_driver(self, connection_info):
+         driver_type = connection_info.get('driver_volume_type')
+@@ -1615,7 +1637,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         image_format = CONF.libvirt.snapshot_image_format or source_type
+ 
+         # NOTE(bfilippov): save lvm and rbd as raw
+-        if image_format == 'lvm' or image_format == 'rbd':
++        if image_format in ('lvm', 'rbd', 'sio'):
+             image_format = 'raw'
+ 
+         metadata = self._create_snapshot_metadata(instance.image_meta,
+@@ -1638,7 +1660,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         if (self._host.has_min_version(MIN_LIBVIRT_LIVESNAPSHOT_VERSION,
+                                        MIN_QEMU_LIVESNAPSHOT_VERSION,
+                                        host.HV_DRIVER_QEMU)
+-             and source_type not in ('lvm')
++             and source_type not in ('lvm', 'sio')
+              and not CONF.ephemeral_storage_encryption.enabled
+              and not CONF.workarounds.disable_libvirt_livesnapshot):
+             live_snapshot = True
+@@ -2752,6 +2774,8 @@ class LibvirtDriver(driver.ComputeDriver):
+         # cleanup rescue volume
+         lvm.remove_volumes([lvmdisk for lvmdisk in self._lvm_disks(instance)
+                                 if lvmdisk.endswith('.rescue')])
++        if CONF.libvirt.images_type == 'sio':
++            LibvirtDriver._get_sio_driver().cleanup_rescue_volumes(instance)
+ 
+     def poll_rebooting_instances(self, timeout, instances):
+         pass
+@@ -2985,10 +3009,12 @@ class LibvirtDriver(driver.ComputeDriver):
+                   specified_fs=specified_fs)
+ 
+     @staticmethod
+-    def _create_swap(target, swap_mb, max_size=None, context=None):
++    def _create_swap(target, swap_mb, max_size=None, context=None,
++                     is_block_dev=False):
+         """Create a swap file of specified size."""
+-        libvirt_utils.create_image('raw', target, '%dM' % swap_mb)
+-        utils.mkfs('swap', target)
++        if not is_block_dev:
++            libvirt_utils.create_image('raw', target, '%dM' % swap_mb)
++        utils.mkfs('swap', target, run_as_root=True)
+ 
+     @staticmethod
+     def _get_console_log_path(instance):
+@@ -5004,6 +5030,8 @@ class LibvirtDriver(driver.ComputeDriver):
+                                CONF.libvirt.images_volume_group)
+         elif CONF.libvirt.images_type == 'rbd':
+             info = LibvirtDriver._get_rbd_driver().get_pool_info()
++        elif CONF.libvirt.images_type == 'sio':
++            info = LibvirtDriver._get_sio_driver().get_pool_info()
+         else:
+             info = libvirt_utils.get_fs_info(CONF.instances_path)
+ 
+@@ -5614,7 +5642,6 @@ class LibvirtDriver(driver.ComputeDriver):
+         if (dest_check_data.obj_attr_is_set('image_type') and
+                 CONF.libvirt.images_type == dest_check_data.image_type and
+                 self.image_backend.backend().is_shared_block_storage()):
+-            # NOTE(dgenin): currently true only for RBD image backend
+             return True
+ 
+         if (dest_check_data.is_shared_instance_path and
+@@ -6669,7 +6696,9 @@ class LibvirtDriver(driver.ComputeDriver):
+                 libvirt_utils.write_to_file(image_disk_info_path,
+                                             jsonutils.dumps(image_disk_info))
+ 
+-            if not is_shared_block_storage:
++            if is_shared_block_storage:
++                self.image_backend.backend().connect_disks(instance)
++            else:
+                 # Ensure images and backing files are present.
+                 LOG.debug('Checking to make sure images and backing files are '
+                           'present before live migration.', instance=instance)
+@@ -6690,6 +6719,23 @@ class LibvirtDriver(driver.ComputeDriver):
+                     src = "%s:%s/disk.config" % (instance.host, instance_dir)
+                     self._remotefs.copy_file(src, instance_dir)
+ 
++            if (configdrive.required_by(instance) and
++                    CONF.config_drive_format == 'iso9660' and
++                    (not is_shared_block_storage or
++                     self._get_disk_config_image_type() !=
++                     CONF.libvirt.images_type)):
++                # NOTE(pkoniszewski): Due to a bug in libvirt iso config
++                # drive needs to be copied to destination prior to
++                # migration when instance path is not shared and block
++                # storage is not shared. Files that are already present
++                # on destination are excluded from a list of files that
++                # need to be copied to destination. If we don't do that
++                # live migration will fail on copying iso config drive to
++                # destination and writing to read-only device.
++                # Please see bug/1246201 for more details.
++                src = "%s:%s/disk.config" % (instance.host, instance_dir)
++                self._remotefs.copy_file(src, instance_dir)
++
+             if not is_block_migration:
+                 # NOTE(angdraug): when block storage is shared between source
+                 # and destination and instance path isn't (e.g. volume backed
+@@ -6956,6 +7002,10 @@ class LibvirtDriver(driver.ComputeDriver):
+             disk_dev = vol['mount_device'].rpartition("/")[2]
+             volume_devices.add(disk_dev)
+ 
++        no_block_devices = (
++            block_device_info is not None and
++            self.image_backend.backend().is_shared_block_storage())
++
+         disk_info = []
+         doc = etree.fromstring(xml)
+         disk_nodes = doc.findall('.//devices/disk')
+@@ -6982,6 +7032,11 @@ class LibvirtDriver(driver.ComputeDriver):
+                           'volume', {'path': path, 'target': target})
+                 continue
+ 
++            if no_block_devices and disk_type == 'block':
++                LOG.debug('skipping disk %(path)s as it may belong to '
++                          'used shared block storage')
++                continue
++
+             # get the real disk size or
+             # raise a localized error if image is unavailable
+             if disk_type == 'file':
+@@ -7191,8 +7246,12 @@ class LibvirtDriver(driver.ComputeDriver):
+         ephemeral_down = flavor.ephemeral_gb < eph_size
+         disk_info_text = self.get_instance_disk_info(
+             instance, block_device_info=block_device_info)
+-        booted_from_volume = self._is_booted_from_volume(instance,
+-                                                         disk_info_text)
++        block_device_mapping = driver.block_device_info_get_mapping(
++                                                        block_device_info)
++        root_disk = block_device.get_root_bdm(block_device_mapping)
++        booted_from_volume = (
++            self._is_booted_from_volume(instance, disk_info_text)
++            and root_disk)
+         if (root_down and not booted_from_volume) or ephemeral_down:
+             reason = _("Unable to resize disk down.")
+             raise exception.InstanceFaultRollback(
+@@ -7226,8 +7285,6 @@ class LibvirtDriver(driver.ComputeDriver):
+ 
+         self.power_off(instance, timeout, retry_interval)
+ 
+-        block_device_mapping = driver.block_device_info_get_mapping(
+-            block_device_info)
+         for vol in block_device_mapping:
+             connection_info = vol['connection_info']
+             disk_dev = vol['mount_device'].rpartition("/")[2]
+@@ -7372,6 +7429,7 @@ class LibvirtDriver(driver.ComputeDriver):
+                          block_device_info=None, power_on=True):
+         LOG.debug("Starting finish_migration", instance=instance)
+ 
++        self.image_backend.backend().connect_disks(instance)
+         block_disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
+                                                   instance,
+                                                   image_meta,
+@@ -7486,6 +7544,7 @@ class LibvirtDriver(driver.ComputeDriver):
+             self._cleanup_failed_migration(inst_base)
+             utils.execute('mv', inst_base_resize, inst_base)
+ 
++        self.image_backend.backend().connect_disks(instance)
+         backend = self.image_backend.image(instance, 'disk')
+         # Once we rollback, the snapshot is no longer needed, so remove it
+         # TODO(nic): Remove the try/except/finally in a future release
+@@ -7496,7 +7555,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         # anymore, the try/except/finally should be removed,
+         # and ignore_errors should be set back to False (the default) so
+         # that problems throw errors, like they should.
+-        if backend.check_image_exists():
++        if CONF.libvirt.images_type != 'rbd' or backend.check_image_exists():
+             try:
+                 backend.rollback_to_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
+             except exception.SnapshotNotFound:
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 06a9c8f..cbf6664 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -29,6 +29,7 @@ from oslo_utils import strutils
+ from oslo_utils import units
+ import six
+ 
++from nova.compute import task_states
+ import nova.conf
+ from nova import exception
+ from nova.i18n import _
+@@ -43,12 +44,14 @@ from nova.virt.libvirt import config as vconfig
+ from nova.virt.libvirt.storage import dmcrypt
+ from nova.virt.libvirt.storage import lvm
+ from nova.virt.libvirt.storage import rbd_utils
++from nova.virt.libvirt.storage import sio_utils
+ from nova.virt.libvirt import utils as libvirt_utils
+ 
+ __imagebackend_opts = [
+     cfg.StrOpt('images_type',
+                default='default',
+-               choices=('raw', 'qcow2', 'lvm', 'rbd', 'ploop', 'default'),
++               choices=('raw', 'qcow2', 'lvm', 'rbd', 'ploop', 'sio',
++                        'default'),
+                help='VM Images format. If default is specified, then'
+                     ' use_cow_images flag is used instead of this one.'),
+     cfg.StrOpt('images_volume_group',
+@@ -233,19 +236,19 @@ class Image(object):
+         :filename: Name of the file in the image directory
+         :size: Size of created image in bytes (optional)
+         """
+-        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
+-        def fetch_func_sync(target, *args, **kwargs):
+-            # The image may have been fetched while a subsequent
+-            # call was waiting to obtain the lock.
+-            if not os.path.exists(target):
+-                fetch_func(target=target, *args, **kwargs)
+-
+         base_dir = os.path.join(CONF.instances_path,
+                                 CONF.image_cache_subdirectory_name)
+         if not os.path.exists(base_dir):
+             fileutils.ensure_tree(base_dir)
+         base = os.path.join(base_dir, filename)
+ 
++        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
++        def fetch_func_sync(target, *args, **kwargs):
++            # The image may have been fetched while a subsequent
++            # call was waiting to obtain the lock.
++            if target != base or not os.path.exists(target):
++                fetch_func(target=target, *args, **kwargs)
++
+         if not self.check_image_exists() or not os.path.exists(base):
+             self.create_image(fetch_func_sync, base, size,
+                               *args, **kwargs)
+@@ -469,6 +472,24 @@ class Image(object):
+         """
+         pass
+ 
++    @staticmethod
++    def connect_disks(instance):
++        """Connect existing instance disks to the compute host.
++
++        Makes existing instance disks available to use with libvirt.
++
++        :param instance: instance object
++        """
++        pass
++
++    @staticmethod
++    def disconnect_disks(instance):
++        """Disconnect instance disks from the compute host.
++
++        :param instance: instance object
++        """
++        pass
++
+ 
+ class Raw(Image):
+     def __init__(self, instance=None, disk_name=None, path=None):
+@@ -1106,6 +1127,133 @@ class Ploop(Image):
+                                        out_format)
+ 
+ 
++class Sio(Image):
++
++    def __init__(self, instance=None, disk_name=None, path=None):
++        super(Sio, self).__init__("block", "raw", is_block_dev=True)
++
++        self.extra_specs = instance.flavor.extra_specs
++        if (instance.task_state == task_states.RESIZE_FINISH):
++            self.orig_extra_specs = instance.get_flavor('old').extra_specs
++        else:
++            self.orig_extra_specs = {}
++        self.driver = sio_utils.SIODriver(self.extra_specs)
++
++        if path:
++            vol_id = path.split('-')[-1]
++            self.volume_name = self.driver.get_volume_name(vol_id)
++            self.path = path
++        else:
++            self.volume_name = sio_utils.get_sio_volume_name(instance,
++                                                             disk_name)
++            if self.driver.check_volume_exists(self.volume_name):
++                self.path = self.driver.get_volume_path(self.volume_name)
++            else:
++                self.path = None
++
++    @staticmethod
++    def is_shared_block_storage():
++        return True
++
++    @staticmethod
++    def connect_disks(instance):
++        sio_utils.SIODriver().map_volumes(instance)
++
++    @staticmethod
++    def disconnect_disks(instance):
++        sio_utils.SIODriver().cleanup_volumes(instance, unmap_only=True)
++
++    def is_rescuer(self):
++        return sio_utils.is_sio_volume_rescuer(self.volume_name)
++
++    def check_image_exists(self):
++        # workaround to allow cache method to invoke create_image for resize
++        # operation
++        return False
++
++    def create_image(self, prepare_template, base, size, *args, **kwargs):
++        generating = 'image_id' not in kwargs
++        # NOTE(ft): We assume that only root disk is recreated in rescue mode.
++        # With this assumption the code becomes more simple and fast.
++        if self.driver.check_volume_exists(self.volume_name):
++            sio_utils.verify_volume_size(size)
++            vol_size = self.get_disk_size(self.volume_name)
++            if size < vol_size:
++                LOG.debug('Cannot resize volume %s to a smaller size.',
++                          self.volume_name)
++            else:
++                # give a chance for extend_volume to migrate the volume to
++                # another pd/sp if required
++                self.driver.extend_volume(
++                    self.volume_name, size,
++                    self.extra_specs, self.orig_extra_specs)
++
++            self.path = self.driver.map_volume(self.volume_name)
++        elif generating:
++            sio_utils.verify_volume_size(size)
++            self.driver.create_volume(self.volume_name, size, self.extra_specs)
++            self.path = self.driver.map_volume(self.volume_name)
++            prepare_template(target=self.path, is_block_dev=True,
++                             *args, **kwargs)
++        else:
++            if not os.path.exists(base):
++                prepare_template(target=base, max_size=size, *args, **kwargs)
++
++            base_size = disk.get_disk_size(base)
++            if size is None and self.is_rescuer():
++                size = sio_utils.choose_volume_size(base_size)
++                self.extra_specs = dict(self.extra_specs)
++                self.extra_specs[sio_utils.PROVISIONING_TYPE_KEY] = 'thin'
++            else:
++                sio_utils.verify_volume_size(size)
++                self.verify_base_size(base, size, base_size=base_size)
++
++            self.driver.create_volume(self.volume_name, size, self.extra_specs)
++            self.path = self.driver.map_volume(self.volume_name)
++            self.driver.import_image(base, self.path)
++
++    def resize_image(self, size):
++        pass
++
++    def get_disk_size(self, name):
++        return self.driver.get_volume_size(self.volume_name)
++
++    def get_model(self, connection):
++        return imgmodel.SIOImage()
++
++    def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
++                     extra_specs, hypervisor_version):
++        if self.path is None:
++            raise exception.NovaException(
++                _('Disk volume %s is not connected') % self.volume_name)
++
++        info = super(Sio, self).libvirt_info(
++            disk_bus, disk_dev, device_type, cache_mode,
++            extra_specs, hypervisor_version)
++
++        # set is_block_dev to select proper backend driver,
++        # because ScaleIO volumes are block devices in fact
++        info.driver_name = libvirt_utils.pick_disk_driver_name(
++            hypervisor_version, is_block_dev=True)
++
++        return info
++
++    def snapshot_extract(self, target, out_format):
++        self.driver.export_image(self.path, target, out_format)
++
++    def create_snap(self, name):
++        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
++        self.driver.snapshot_volume(self.volume_name, snap_name)
++
++    def remove_snap(self, name, ignore_errors=False):
++        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
++        self.driver.remove_volume(snap_name)
++
++    def rollback_to_snap(self, name):
++        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
++        self.driver.rollback_to_snapshot(self.volume_name, snap_name)
++
++
+ class Backend(object):
+     def __init__(self, use_cow):
+         self.BACKEND = {
+@@ -1114,7 +1262,8 @@ class Backend(object):
+             'lvm': Lvm,
+             'rbd': Rbd,
+             'ploop': Ploop,
+-            'default': Qcow2 if use_cow else Raw
++            'sio': Sio,
++            'default': Qcow2 if use_cow else Raw,
+         }
+ 
+     def backend(self, image_type=None):
+diff --git a/nova/virt/libvirt/utils.py b/nova/virt/libvirt/utils.py
+index 1925cda..134b6c9 100644
+--- a/nova/virt/libvirt/utils.py
++++ b/nova/virt/libvirt/utils.py
+@@ -391,7 +391,9 @@ def find_disk(virt_dom):
+ 
+ 
+ def get_disk_type_from_path(path):
+-    """Retrieve disk type (raw, qcow2, lvm, ploop) for given file."""
++    """Retrieve disk type (raw, qcow2, lvm, etc) for given file."""
++    if path.startswith('/dev/disk/by-id/emc-vol'):
++        return 'sio'
+     if path.startswith('/dev'):
+         return 'lvm'
+     elif path.startswith('rbd:'):
